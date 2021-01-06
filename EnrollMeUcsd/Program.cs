@@ -4,7 +4,14 @@ using System.Linq;
 using System.Threading.Tasks;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
+using OpenQA.Selenium.DevTools.V84.IndexedDB;
 using OpenQA.Selenium.Support.UI;
+
+const string activePopupCssSelector = "div[class='ui-dialog " +
+                                      "ui-widget ui-widget-content " +
+                                      "ui-corner-all ui-front " +
+                                      "ui-dialog-buttons ui-draggable " +
+                                      "ui-resizable']";
 
 static void Wait(IWebDriver driver, Func<IWebDriver, bool> func, TimeSpan time)
 {
@@ -12,20 +19,36 @@ static void Wait(IWebDriver driver, Func<IWebDriver, bool> func, TimeSpan time)
 	wait.Until(func);
 }
 
-var sectionsToWatch = new List<string>
+static IReadOnlyCollection<IWebElement> GetPopUpElement(ChromeDriver driver)
+	=> driver.FindElementsByCssSelector(activePopupCssSelector);
+
+static void Log(int type, object content)
 {
-	"029808"
+	var logType = "INFO";
+	if (type == 1)
+	{
+		Console.ForegroundColor = ConsoleColor.Red;
+		logType = "ERROR";
+	}
+
+	Console.WriteLine($"{DateTime.Now:[HH:mm:ss]} [{logType}] {content}");
+	Console.ResetColor();
 };
 
-const int maximumClasses = 1;
-Console.WriteLine("[INFO] Enter UCSD Username.");
+var sectionsToWatch = new List<string>
+{
+	"027348"
+};
+const int maximumClasses = 2;
+Log(0, "Enter UCSD Username.");
 var username = Console.ReadLine() ?? string.Empty;
-Console.WriteLine("[INFO] Enter UCSD Password.");
+Log(0, "Enter UCSD Password.");
 var password = Console.ReadLine() ?? string.Empty;
 Console.Clear();
+
 if (username.Length == 0 || password.Length == 0)
 {
-	Console.WriteLine("[ERROR] Empty Username or Password. Try Again.");
+	Log(1, "Empty Username or Password. Try Again.");
 	return;
 }
 
@@ -51,26 +74,28 @@ driver.FindElementByName("urn:mace:ucsd.edu:sso:password")
 // Invalid password.
 if (driver.FindElementsById("_login_error_message").Any())
 {
-	Console.WriteLine("[ERROR] Invalid Password. Try Again.");
+	Log(1, "Invalid Password. Try Again.");
 	driver.Close();
 	return;
 }
 
 try
 {
-	Console.WriteLine("[INFO] Please authenticate this session with Duo 2FA.");
+	Log(0, "Please authenticate this session with Duo 2FA.");
 	Wait(driver, x => x.Url.Contains("start"), TimeSpan.FromMinutes(2));
 }
 catch (Exception)
 {
-	Console.WriteLine("[ERROR] Failed to authenticate. Try again.");
+	Log(1, "Failed to authenticate. Try again.");
 	driver.Close();
 	return;
 }
 
 Wait(driver, x => x.FindElements(By.Id("startpage-button-go")).Count != 0,
 	TimeSpan.FromSeconds(5));
-Console.WriteLine("[INFO] Logged In!");
+Log(0, "Logged in successfully.");
+
+// Click on "Go" 
 driver.FindElementById("startpage-button-go").Click();
 await Task.Delay(TimeSpan.FromSeconds(1));
 // click on "Advanced Search" 
@@ -78,7 +103,8 @@ driver.FindElementById("advanced-search").Click();
 var classesEnrolledIn = new List<string>();
 while (true)
 {
-	foreach (var section in sectionsToWatch)
+	await Task.Delay(500); 
+	foreach (var section in sectionsToWatch.Where(section => !classesEnrolledIn.Contains(section)))
 	{
 		// click "Reset" button
 		driver.FindElementById("search-div-t-reset").Click();
@@ -86,14 +112,22 @@ while (true)
 		driver.FindElementById("search-div-t-t3-i4").SendKeys(section + Keys.Enter);
 		// delay so the table can properly load
 		// We know the table is fully loaded when the spinner is gone
-		Wait(driver, x => x.FindElements(By.ClassName("wr-spinner-loading")).Count == 0, 
+		Wait(driver, x => x.FindElements(By.ClassName("wr-spinner-loading")).Count == 0,
 			TimeSpan.FromSeconds(5));
 		// Account for minor delay. 
-		await Task.Delay(50); 
+		await Task.Delay(50);
+
 		// check to see if there even are rows to check 
 		if (driver.FindElementsById("search-group-header-id").Count == 0)
 		{
-			Console.WriteLine($"[INFO] Section ID {section} not found.");
+			Log(1, $"Section ID {section} not found. Is the section ID valid?");
+			// Check to see if we got a possible system error message 
+			// If so, close it and continue. 
+			GetPopUpElement(driver)
+				.FirstOrDefault(x => x.GetAttribute("style").Contains("display: block;"))?
+				.FindElements(By.Id("dialog-msg-close"))
+				.FirstOrDefault()?
+				.Click();
 			continue;
 		}
 
@@ -103,37 +137,55 @@ while (true)
 		var enrollButton = driver.FindElementsById($"search-enroll-id-{section}");
 		if (enrollButton.Count == 0)
 		{
-			Console.WriteLine($"[INFO] Unable to enroll in {section}. Enroll button doesn't exist.");
+			Log(1, $"Unable to enroll in {section}. This class may have a waitlist system.");
 			continue;
 		}
 
 		// click on the enroll button 
 		enrollButton[0].Click();
-		// a popup should now appear
-		// TODO find specific button id
-		var allPossibleButtons = driver.FindElementsByClassName("ui-button-text");
-		if (allPossibleButtons.All(x => x.Text != "Confirm"))
+
+		// Wait for the popup to appear. We know the popup appears when parts of the UI is 
+		// "blocked off" due to a popup. 
+		Wait(driver, x => GetPopUpElement(x as ChromeDriver)
+				.Any(a => a.GetAttribute("style").Contains("display: block;")),
+			TimeSpan.FromSeconds(10));
+
+		var possiblePopups = GetPopUpElement(driver);
+		// a popup should now appear. This is where we can attempt to confirm said enrollment. 
+		// First, check if a confirm button exists. If it doesn't, then an error occurred and we can ex
+		var confirmButton = possiblePopups
+			.FirstOrDefault(x => x.GetAttribute("style").Contains("display: block;"))?
+			.FindElements(By.ClassName("ui-button-text"))?
+			.FirstOrDefault(x => x.Text == "Confirm");
+		// The confirm button doesn't exist.
+		if (confirmButton is null)
 		{
-			Console.WriteLine($"[INFO] Unable to enroll in {section}. Confirm button not found.");
+			Log(1, $"Unable to enroll in {section}. Do you have permission to enroll in this course?");
+			var closeButton = GetPopUpElement(driver)
+				.FirstOrDefault(x => x.GetAttribute("style").Contains("display: block;"))?
+				.FindElements(By.Id("dialog-after-action-close"));
+			closeButton?.FirstOrDefault()?.Click();
 			continue;
 		}
 
-		allPossibleButtons.First(x => x.Text == "Confirm").Click();
-		Wait(driver, x => x.FindElements(By.Id("dialog-after-action")).Count != 0,
-			TimeSpan.FromSeconds(10));
+		confirmButton.Click();
 		classesEnrolledIn.Add(section);
-		Console.WriteLine($"[INFO] Successfully added section ID {section}!");
+		Log(0, $"Successfully added section ID {section} to your schedule!");
+		// TODO figure out a better way to determine when we should find the confirmation button 
+		await Task.Delay(250);
 		var popupBox = driver.FindElementsById("dialog-after-action");
 		if (popupBox.Any())
 		{
 			try
 			{
+				// TODO confirm that the button exists 
 				var emailButton = driver.FindElementById("dialog-after-action-email");
 				emailButton.Click();
 				Wait(driver, x => x.FindElements(By.Id("dialog-msg-close")).Count != 0,
 					TimeSpan.FromSeconds(10));
 				var closeEmailConfirmButton = driver.FindElementById("dialog-msg-close");
 				closeEmailConfirmButton.Click();
+				Console.WriteLine("\tConfirmation Email Sent.");
 			}
 			catch (Exception)
 			{
@@ -154,5 +206,5 @@ while (true)
 }
 
 outLoop:
-Console.WriteLine($"Successfully Enrolled In {classesEnrolledIn.Count} Classes.");
-Console.WriteLine($"Classes: {string.Join(", ", classesEnrolledIn)}");
+Log(0, $"Successfully Enrolled In {classesEnrolledIn.Count} Classes.");
+Log(0, $"Classes: {string.Join(", ", classesEnrolledIn)}");
