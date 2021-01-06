@@ -1,10 +1,10 @@
-﻿using System;
+﻿#define OVERRIDE_DEBUG
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
-using OpenQA.Selenium.DevTools.V84.IndexedDB;
 using OpenQA.Selenium.Support.UI;
 
 const string activePopupCssSelector = "div[class='ui-dialog " +
@@ -13,10 +13,10 @@ const string activePopupCssSelector = "div[class='ui-dialog " +
                                       "ui-dialog-buttons ui-draggable " +
                                       "ui-resizable']";
 
-static void Wait(IWebDriver driver, Func<IWebDriver, bool> func, TimeSpan time)
+static void Wait(IWebDriver driver, Predicate<IWebDriver> func, TimeSpan time)
 {
 	var wait = new WebDriverWait(driver, time);
-	wait.Until(func);
+	wait.Until(x => func(x));
 }
 
 static IReadOnlyCollection<IWebElement> GetPopUpElement(ChromeDriver driver)
@@ -33,11 +33,16 @@ static void Log(int type, object content)
 
 	Console.WriteLine($"{DateTime.Now:[HH:mm:ss]} [{logType}] {content}");
 	Console.ResetColor();
-};
+}
 
 var sectionsToWatch = new List<string>
 {
-	"027348"
+	"027169",
+	"027348",
+	"027389",
+	"029810",
+	"027399",
+	"029808"
 };
 const int maximumClasses = 2;
 Log(0, "Enter UCSD Username.");
@@ -45,7 +50,6 @@ var username = Console.ReadLine() ?? string.Empty;
 Log(0, "Enter UCSD Password.");
 var password = Console.ReadLine() ?? string.Empty;
 Console.Clear();
-
 if (username.Length == 0 || password.Length == 0)
 {
 	Log(1, "Empty Username or Password. Try Again.");
@@ -53,14 +57,14 @@ if (username.Length == 0 || password.Length == 0)
 }
 
 var chromeOptions = new ChromeOptions();
-#if !DEBUG
+#if !DEBUG || OVERRIDE_DEBUG
 chromeOptions.AddArgument("--headless");
 #endif
 chromeOptions.AddArgument("log-level=3");
 var chromeService = ChromeDriverService.CreateDefaultService(AppDomain.CurrentDomain.BaseDirectory);
 chromeService.SuppressInitialDiagnosticInformation = true;
 using var driver = new ChromeDriver(chromeService, chromeOptions);
-#if DEBUG
+#if DEBUG && !OVERRIDE_DEBUG
 driver.Manage().Window.Maximize();
 #endif
 
@@ -103,7 +107,9 @@ driver.FindElementById("advanced-search").Click();
 var classesEnrolledIn = new List<string>();
 while (true)
 {
-	await Task.Delay(500); 
+	// Just to be nice to WebReg
+	// Also because, occasionally, the buttons may be delayed. 
+	await Task.Delay(500);
 	foreach (var section in sectionsToWatch.Where(section => !classesEnrolledIn.Contains(section)))
 	{
 		// click "Reset" button
@@ -141,6 +147,13 @@ while (true)
 			continue;
 		}
 
+		// Make sure the button can be clicked on. 
+		if (enrollButton[0].GetAttribute("aria-disabled") == "true")
+		{
+			Log(1, $"Unable to enroll in {section}. You may already be enrolled in the course.");
+			continue;
+		}
+
 		// click on the enroll button 
 		enrollButton[0].Click();
 
@@ -172,7 +185,7 @@ while (true)
 		classesEnrolledIn.Add(section);
 		Log(0, $"Successfully added section ID {section} to your schedule!");
 		// TODO figure out a better way to determine when we should find the confirmation button 
-		await Task.Delay(250);
+		await Task.Delay(500);
 		var popupBox = driver.FindElementsById("dialog-after-action");
 		if (popupBox.Any())
 		{
