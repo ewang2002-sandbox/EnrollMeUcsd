@@ -139,18 +139,27 @@ while (true)
 
 		// click on the first row (there will only be one row)
 		driver.FindElementById("search-group-header-id").Click();
+		// get the course dept + id
+		var courseDeptId = driver.FindElementById("search-group-header-id")
+			.FindElement(By.TagName("td"))
+			.Text.Trim()
+			// because some course dept + id has two spaces
+			.Replace("  ", " "); 
+		
 		// check if the enroll button exists. If it does, click. 
 		var enrollButton = driver.FindElementsById($"search-enroll-id-{section}");
 		if (enrollButton.Count == 0)
 		{
-			Log(1, $"Unable to enroll in {section}. This class may have a waitlist system.");
+			Log(1, $"Unable to enroll in {courseDeptId} ({section}). This class may have a wait-list " 
+			       + "system.");
 			continue;
 		}
 
 		// Make sure the button can be clicked on. 
 		if (enrollButton[0].GetAttribute("aria-disabled") == "true")
 		{
-			Log(1, $"Unable to enroll in {section}. You may already be enrolled in the course.");
+			Log(1, $"Unable to enroll in {courseDeptId} ({section}). You're either enrolled in this class " 
+			       + "or your enrollment time has passed.");
 			continue;
 		}
 
@@ -173,7 +182,8 @@ while (true)
 		// The confirm button doesn't exist.
 		if (confirmButton is null)
 		{
-			Log(1, $"Unable to enroll in {section}. Do you have permission to enroll in this course?");
+			Log(1, $"Unable to enroll in {courseDeptId} ({section}). Do you have permission to " 
+			       + "enroll in this course?");
 			var closeButton = GetPopUpElement(driver)
 				.FirstOrDefault(x => x.GetAttribute("style").Contains("display: block;"))?
 				.FindElements(By.Id("dialog-after-action-close"));
@@ -215,6 +225,7 @@ while (true)
 
 		if (classesEnrolledIn.Count >= maximumClasses)
 			goto outLoop;
+		Console.WriteLine();
 	}
 }
 
